@@ -1,0 +1,181 @@
+https://proteo.me.uk/2009/10/sound-level-monitoring-in-java/
+
+    private void c() {
+	Thread monitorThread;
+	AudioFormat format;
+	DataLine.Info info;
+	TargetDataLine targetLine;
+	byte[] buffer;
+	buffer = new byte[1000000];
+//	int sum;
+	try {
+//	    format = new AudioFormat(AudioFormat.Encoding.PCM_SIGNED, 44100, 16, 2, 4, 44100, false);
+	    format = getAudioFormat();
+	    info = new DataLine.Info(TargetDataLine.class, format);
+	    targetLine = (TargetDataLine) AudioSystem.getLine(info);
+	    targetLine.open();
+	    monitorThread = new Thread() {
+		@Override
+		public void run() {
+		    targetLine.start();
+		    int bytesRead;
+		    while (true) {
+			bytesRead = targetLine.read(buffer, 0, buffer.length);
+			if (bytesRead >= 0) {
+//			    short max = (short) (buffer[0] + (buffer[1] << 8));
+			    int sum = (buffer[0] + buffer[1]);
+//			    sum = 0;
+			    for (int p = 2; p < bytesRead - 1; p += 2) {
+//				short thisValue = (short) (buffer[p] + (buffer[p + 1] << 8));
+				sum = sum + Math.abs(buffer[p]) + Math.abs(buffer[p + 1]);
+//				sum = (short) (Math.abs(sum) + Math.abs((short) (buffer[p] + (buffer[p + 1] << 8))));
+//				if (thisValue > max) {
+//				    max = thisValue;
+//				}
+			    }
+//			    System.out.println("Max: " + max);
+			    System.out.println("Sum: " + sum);
+//			    try {
+//				sleep(1000);
+//			    } catch (InterruptedException ex) {
+//				Logger.getLogger(Main.class.getName()).log(Level.SEVERE, null, ex);
+//			    }
+			}
+
+		    }
+		}
+	    };
+	    monitorThread.start();
+
+//	    Thread.sleep(10000);
+//	    targetLine.stop();
+//	    targetLine.close();
+//	    System.exit(0);
+
+	} catch (LineUnavailableException ex) {
+	    System.out.println("LineUnavailable" + ex);
+	}
+    }
+
+________________________
+Sound Level Monitoring in Java
+
+By simon
+
+For a project I’ve been working on I needed what I thought should be fairly easy to make – a simple widget to monitor an input sound level.  I’d never worked with the full javax.sound API before, but assumed that there would be ample documentation to do what I needed.
+
+Having started on the project things turned out to be a bit more tricky than I thought.  Most of the examples I found revolve around passing sound from an input to an output, and the sound API makes this fairly easy.  What proved to me more tricky was the intercepting and processing of a sound input.  I’ll therefore go through what I did to make this work in the end.
+
+Let’s start with the basics:
+
+What you need at the end of the day is a TargetDataLine object.  The nomenclature of the javax.sound API is somewhat unusual in that a SourceDataLine is a sound output line (such as a set of speakers), whereas a TargetDataLine is a sound input line (such as a microphone).
+
+You have two choices for getting a TargetDataLine, you can either go through a rigorous process of exploring the capabilities of all of the sound lines on your system and find some way to select the best match to what you want.  Alternatively you can decide on the type of line you want and request that from the sound system.  If this type of line is not available then you will get a LineUnavailableException.
+
+Having tried both approaches I ended up plumping for the second option.  Since I didn’t need high precision and wasn’t asking anything difficult of my sound source I could select conservative properties for my line and trust that nearly all sound cards would be able to support this.  In practice this code has worked on every machine I’ve tried it on, but conceivably it could fail on some sound cards.
+
+You need two things to get a TargetDataLine.  An AudioSystem and an AudioFormat object.  The AudioSystem class provides a series of methods through which you can access the components of the audio system on your machine.
+
+An AudioFormat object defines the characteristics of the sound stream you want to obtain.  There are a few different parameters you must set and there are a range of acceptable values which will be supported by the majority of sound cards:
+
+    Sample rate: This says how many times per second the sound will be sampled
+    Sample size: The number of bits in each sample taken
+    Number of channels: Whether this input is mono or stereo
+    Signed: Whether the sound samples are signed or unsigned
+    Endianness: For multi-byte sample sizes says whether the byte order is big or little endian
+
+Since I was only interested in monitoring a line level I chose fairly conservative values:
+
+    Sample Rate: 8000.  This is about the lowest commonly used sample rate.  CD quality sound is 44.1kHz, but this is overkill for a simple sound monitor
+    Sample Size: 16 (bits).  You can also use 8 bit samples depending on the resolution you are after.
+    Channels: 1 My interest was in overall sound level so mono sound was OK
+    Signed: true.  This is the more common option, and is easier to deal with in java since all java primitives are signed.
+    Endianness: Since my samples are 16 bit then byte order matters.  Most common audio formats (eg WAV) are little endian as is the x86 architecture, so this is the common choice.
+
+In practice this means that to get a TargetDataLine I can do something like this:
+
+ AudioFormat audioFormat = getAudioFormat();
+
+ targetDataLine = (TargetDataLine) AudioSystem.getTargetDataLine(audioFormat);
+
+ private AudioFormat getAudioFormat(){
+
+   float sampleRate = 8000.0F;
+
+   int sampleSizeInBits = 16;
+
+   int channels = 1;
+
+   boolean signed = true;
+
+   boolean bigEndian = false;
+
+   return new AudioFormat(sampleRate,sampleSizeInBits,channels,signed,bigEndian);
+
+ }
+
+Once I have my TargetDataLine I then need to activate it before I can read any data from it.  Activating the line is as simple as:
+
+ targetDataLine.open();
+ targetDataLine.start();
+
+Once the line is open you can begin to read data from it.  The usual way to do this is in a separate thread where you have a buffer which you fill with data from the line and then process.  A read from a line will block until the buffer is full, so the size of your buffer will determine how often you process the data.
+
+The amount of data produced will be a function of your sample rate, sample size and number of channels.  If you have one channel and 16 bit samples at 8kHz then every second you will produce 8000 * 16 * 1 bits of data or 16000 bytes of data.  Therefore a 16000 byte buffer will be filled every second, and 8000 byte buffer will fill in half a second.
+
+Reading the input can therefore be done is a loop as follows:
+
+byte [] buffer = new byte[2000];
+while (true) {
+  int bytesRead = targetDataLine.read(buffer,0,buffer.length);
+}
+
+The remaining problem is then how to process the filled buffer to get the overall level.  There are a few options for this, you could work out the average sound level over the whole sample, or you could work out the peak level throughout the sample.  I chose the latter method, but the basic process would be the same in either case.
+
+Since my samples were 16bit I had to take into account that each sample was composed of two bytes, and I needed to recombine these into a signed short before processing them.  This involves using a bit shifting operation to combine the two bytes, and taking into account the little endian byte order.
+
+short max;
+
+if (bytesRead >=0) {
+ max = (short) (buffer[0] + (buffer[1] << 8));
+ for (int p=2;p<bytesRead-1;p+=2) {
+   short thisValue = (short) (buffer[p] + (buffer[p+1] << 8));
+   if (thisValue>max) max=thisValue;
+ }
+ System.out.println("Max value is "+max);
+}
+
+For an 8 bit sample I could use the individual bytes directly.  For a big endian sample the p and p+1 positions in the generation of the short would have to be reversed.
+
+Using this method I can now sample the input line at any rate I choose to get the raw data from which a peak meter could be produced.  The final thing to remember is that our perception of sound should always be viewed on a log scale.  If you are creating a sound meter you should therefore log transform the data before plotting to gain a more realistic view of the sound level.
+
+
+___________________
+
+    private void open() {
+	BufferedReader reader;
+	String line1, line2;
+        tableModel.setRowCount(0);
+	Object[] data;
+	tableModel.setRowCount(0);
+	reader = null;
+	try {
+	    reader = new BufferedReader(new FileReader(DER_DAT_DATEINAME));
+	    while ((line1 = reader.readLine()) != null & (line2 = reader.readLine()) != null ) {
+		data = new Object[2];
+		data[0] = line1;
+		data[1] = Boolean.valueOf(line2);
+		tableModel.addRow(data);
+	    }
+	} catch (IOException ex) {
+	     h.setMessage(ex.toString());
+	} finally {
+	    try {
+		reader.close();
+	    } catch (IOException ex) {
+		h.setMessage(ex.toString());
+	    }
+	}
+	
+	
+    }
